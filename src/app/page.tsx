@@ -50,7 +50,7 @@ export default function Home() {
 
     const login = async () => {
         await setAuthKey(crypto.randomBytes(16).toString('hex'));
-        await invoke('open_url', { url: `https://auth.sukusho.cloud/${authKey}` });
+        await invoke('open_url', { url: `https://sukusho.cloud/appauth/${authKey}` });
     }
 
     useEffect(() => {
