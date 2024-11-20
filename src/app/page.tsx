@@ -37,14 +37,15 @@ export default function Home() {
     const setVars = async () => {
         const store = await load('settings.json', { autoSave: false });
 
-        const apiKey = store.get<{ value: string }>('apiKey');
+        const apiKey = await store.get<{ value: string }>('apiKey');
 
-        console.log(apiKey.value);
-
-        if (!apiKey.value) {
+        if (apiKey?.value) {
+            console.log(apiKey.value);
+            setLoggedIn(true);
+        } else {
             setLoggedIn(false);
-            setLoading(false);
         }
+        setLoading(false);
     }
 
     const login = async () => {
