@@ -1,42 +1,48 @@
 "use client";
 import { invoke } from '@tauri-apps/api/core';
 import { load } from '@tauri-apps/plugin-store';
-import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { useState, useEffect } from "react";
 import crypto from "crypto";
-
+import { exportJWK } from 'jose';
 import { AiOutlineLoading3Quarters } from "react-icons/ai";
 
-const enableAutostart = async () => {
-    await enable();
-    console.log('Autostart enabled');
+async function generateClientKey() {
+    const algorithm = {
+        name: 'RSA-OAEP',
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: 'SHA-256'
+    };
+
+    const keyPair = await window.crypto.subtle.generateKey(
+        algorithm,
+        true,
+        ['encrypt', 'decrypt']
+    );
+
+    const publicKey = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
+    const privateKey = await window.crypto.subtle.exportKey('jwk', keyPair.privateKey);
+
+    return { publicKey, privateKey };
 }
 
-const disableAutostart = async () => {
-    await disable();
-    console.log('Autostart disabled');
-}
+async function decryptData(encryptedData: string, privateKey: JsonWebKey): Promise<string> {
+    const { importJWK, compactDecrypt } = await import('jose');
 
-const sendTestNotification = async () => {
-    if (await isPermissionGranted()) {
-        await sendNotification({
-            title: 'Hello, world!',
-            body: 'This is a test notification.'
-        });
-    } else {
-        await requestPermission();
-    }
+    //@ts-ignore
+    const importedPrivateKey = await importJWK(privateKey, 'RSA-OAEP');
+    const { plaintext } = await compactDecrypt(encryptedData, importedPrivateKey);
+
+    return new TextDecoder().decode(plaintext);
 }
 
 export default function Home() {
     const [loading, setLoading] = useState(true);
     const [loggedIn, setLoggedIn] = useState(false);
-    const[authKey, setAuthKey] = useState('');
+    const [clientKeys, setClientKeys] = useState<{ publicKey: JsonWebKey, privateKey: JsonWebKey } | null>(null);
 
     const setVars = async () => {
         const store = await load('settings.json', { autoSave: false });
-
         const apiKey = await store.get<{ value: string }>('apiKey');
 
         if (apiKey?.value) {
@@ -49,12 +55,46 @@ export default function Home() {
     }
 
     const login = async () => {
-        await setAuthKey(crypto.randomBytes(16).toString('hex'));
-        await invoke('open_url', { url: `https://sukusho.cloud/appauth/${authKey}` });
-    }
+        setLoading(true);
+        // Generate client key pair
+        const keyPair = await generateClientKey();
+        setClientKeys(keyPair);
+
+        // Convert public key to Base64 encoded string
+        const publicKeyString = JSON.stringify(keyPair.publicKey);
+        const base64EncodedKey = btoa(publicKeyString);
+
+        // Open authentication URL with Base64 encoded public key
+        await invoke('open_url', { url: `https://sukusho.cloud/appauth/${base64EncodedKey}` });
+
+        // Poll for authentication result
+        while (true) {
+            try {
+                let res = await fetch(`https://sukusho.cloud/api/appauth/get/${base64EncodedKey}`);
+                if (res.ok) {
+                    let data = await res.json();
+                    if (data !== null) {
+                        // Decrypt the API key using the private key
+                        const apiKey = await decryptData(data.key, keyPair.privateKey);
+                        console.log(apiKey);
+
+                        const store = await load('settings.json', { autoSave: false });
+                        await store.set('apiKey', { value: apiKey });
+                        await store.save();
+
+                        setLoggedIn(true);
+                        setLoading(false);
+                        break;
+                    }
+                }
+            } catch (e) {
+                console.error(e);
+            }
+            await new Promise(r => setTimeout(r, 5000));
+        }
+    };
 
     useEffect(() => {
-        enableAutostart();
         setVars();
     }, []);
 
